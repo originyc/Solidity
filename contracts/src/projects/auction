@@ -1,0 +1,147 @@
+// SPDX-License-Identifier: GPL-3.0
+
+pragma solidity >=0.5.0 <0.9.0;
+
+
+contract AuctionCreator{
+    Auction[] public auctions;
+
+    function createAuction() public{
+        Auction newAuction = new Auction(msg.sender);
+        auctions.push(newAuction);
+    }
+}
+
+
+
+
+contract Auction{
+    address payable public owner;
+    uint public startBlock;
+    uint public endBlock;
+    string public ipfsHash;
+
+    enum State {Started, Running, Ended, Cancelled}
+    State public auctionState;
+
+    uint public highestBindingBid;
+
+
+    address payable public highestBidder;
+    mapping(address => uint) public bids;
+    uint bidIncrement;
+
+    bool public ownerFinalized = false;
+
+
+    constructor(address eoa){
+        owner = payable(eoa);
+        auctionState = State.Running;
+
+        startBlock = block.number;
+        endBlock = startBlock + 3;
+
+        ipfsHash = "";
+        bidIncrement = 1000000000000000000;
+    }
+
+    // Declare the function modifiers
+    modifier notOwner(){
+        require(msg.sender != owner);
+        _;
+    }
+
+    modifier onlyOwner(){
+        require(msg.sender == owner);
+        _;
+    }
+
+    modifier afterStart(){
+        require(block.number >= startBlock);
+        _;
+    }
+
+    modifier beforeEnd(){
+        require(block.number <= endBlock);
+        _;
+    }
+
+    // Helper function, no reading or writing involved
+    function min(uint a, uint b) pure internal returns(uint){
+        if (a <= b){
+            return a;
+        }else{
+            return b;
+        }
+    }
+
+    // Making sure the owner alone can cancel the Auction before end
+    function cancelAuction() public beforeEnd onlyOwner{
+        auctionState = State.Cancelled;
+    }
+
+
+    function placeBid() public payable notOwner afterStart beforeEnd returns(bool) {
+        
+        // Auction must be running to place a bid
+        require(auctionState == State.Running);
+        // The minimum value to bid
+        // require(msg.value > 0.001 ether);
+
+        uint currentBid =  bids[msg.sender] + msg.value;
+
+        // currentBid must be > highestBindingBid
+        require(currentBid > highestBindingBid);
+
+        // Updates the mapping var
+        bids[msg.sender] = currentBid;
+
+ 
+        if (currentBid <= bids[highestBidder]){ 
+            // highestBidder remains unchanged
+            highestBindingBid = min(currentBid + bidIncrement, bids[highestBidder]);
+        }else{ // highestBidder is another bidder
+             highestBindingBid = min(currentBid, bids[highestBidder] + bidIncrement);
+             highestBidder = payable(msg.sender);
+        }
+    return true;
+    }
+
+    function finalizeAuction() public{
+        require(auctionState == State.Cancelled || block.number > endBlock);
+        require(msg.sender == owner || bids[msg.sender] > 0);
+
+        address payable recipient;
+        uint value;
+
+        if(auctionState == State.Cancelled){
+        // Auction was cancelled
+            recipient = payable(msg.sender);
+            value = bids[msg.sender];
+        }else{
+            // Auction ended successfully
+            if(msg.sender == owner){
+                // The recipient is the owner
+                recipient = owner;
+                value = highestBindingBid;
+            }else{
+                // This is the highest bidder
+                if(msg.sender == highestBidder){
+                    recipient = highestBidder;
+                    value = bids[highestBidder] - highestBindingBid;
+                }else{
+                    // Those bidders did not win the auction
+                    recipient = payable(msg.sender);
+                    value = bids[msg.sender];
+                }
+            }
+        }
+        // resets the bids of the winner
+        bids[recipient] = 0;
+        
+        // sends value to the winnder
+        recipient.transfer(value);
+    
+    }
+
+}
